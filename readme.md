@@ -29,23 +29,28 @@ task-api
 │   ├── routes.py                # authentication endpoints
 │   ├── schemas.py               # Pydantic request/response models
 │   └── user_routes.py           # task CRUD API routes
+├── grafana/
+│   ├── dashboards/
+│   │   └── api-overview.json     # provisioned API metrics dashboard
+│   └── provisioning/
+│       ├── dashboards/
+│       │   └── provider.yml      # dashboard file provider
+│       └── datasources/
+│           └── datasource.yml    # Prometheus data source
 ├── terraform/
 │   ├── main.tf                  # Terraform AWS configuration
-│   ├── variable.tf              # Terraform variables
 │   ├── outputs.tf               # Terraform output values
-│   └── terraform.tfvars         # environment-specific tf values
+│   ├── terraform.tf              # Terraform and provider requirements
+│   └── variable.tf               # Terraform variables
 ├── tests/
+│   ├── __init__.py              # test package marker
 │   └── test_tasks.py            # API test suite
-├── .env                         # local runtime environment variables
-├── .gitignore
+├── .gitignore                   # ignores local environment and generated files
 ├── Dockerfile                   # container image for the FastAPI app
 ├── docker-compose.yml           # multi-service local deployment stack
-├── main.tf                      # root Terraform config
 ├── prometheus.yml               # Prometheus scrape configuration
 ├── readme.md                    # project overview and setup docs
-├── requirements.txt             # Python dependencies
-├── .pytest_cache/               # local pytest cache (generated)
-└── venv/                        # local virtual environment
+└── requirements.txt             # Python dependencies
 ```
 
 ### Tech Stack
@@ -96,10 +101,3 @@ docker compose up -d
 
 ### CI/CD Pipeline
 GitHub Actions tests each API Endpoint after each code commit, ensuring each feature works as expected prior to deployment on the EC2 virtual machine.
-
-### TODO
-- ~~JWT Authentication~~ 
-- ~~Prometheus, Grafana implementation~~
-- ~~Traefik with tecnativa docker socket proxy~~
-- Terraform
-- Frontend
