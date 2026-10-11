@@ -1,10 +1,10 @@
 from fastapi import FastAPI, HTTPException
+from prometheus_fastapi_instrumentator import Instrumentator
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
-from app.database import engine
-from app import routes, user_routes
-from prometheus_fastapi_instrumentator import Instrumentator
 
+from app import routes, user_routes
+from app.database import engine
 
 app = FastAPI()
 
