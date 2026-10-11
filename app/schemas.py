@@ -1,5 +1,6 @@
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from typing import Optional
+
 
 class TaskCreate(BaseModel):
     title: str
@@ -11,8 +12,8 @@ class TaskResponse(BaseModel):
     completed: bool
 
 class TaskUpdate(BaseModel):
-    title: Optional[str] = None
-    completed: Optional[bool] = None
+    title: str | None = None
+    completed: bool | None = None
 
 class UserCreate(BaseModel):
     username: str 
