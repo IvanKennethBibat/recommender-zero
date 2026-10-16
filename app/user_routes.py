@@ -3,7 +3,12 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
 from app import models, schemas
-from app.auth import create_access_token, hash_password, verify_password
+from app.auth import (
+    create_access_token,
+    hash_password,
+    password_needs_rehash,
+    verify_password,
+)
 from app.database import get_db
 
 router = APIRouter()
@@ -33,5 +38,8 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
     user = db.query(models.User).filter(models.User.username == form_data.username).first()
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise invalid_credentials
+    if password_needs_rehash(user.hashed_password):
+        user.hashed_password = hash_password(form_data.password)
+        db.commit()
     access_token = create_access_token(data={"sub": user.username})
     return {"access_token": access_token, "token_type": "bearer"}
