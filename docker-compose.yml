@@ -30,6 +30,14 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.api.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.api.service=api"
+      - "traefik.http.routers.auth.rule=Path(`/login`) || Path(`/register`)"
+      - "traefik.http.routers.auth.priority=100"
+      - "traefik.http.routers.auth.middlewares=auth-ratelimit"
+      - "traefik.http.routers.auth.service=api"
+      - "traefik.http.middlewares.auth-ratelimit.ratelimit.average=5"
+      - "traefik.http.middlewares.auth-ratelimit.ratelimit.period=1m"
+      - "traefik.http.middlewares.auth-ratelimit.ratelimit.burst=5"
       - "traefik.http.services.api.loadbalancer.server.port=8000"
     networks:
       - default
