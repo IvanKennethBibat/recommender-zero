@@ -51,6 +51,9 @@ task-api
 │   ├── main.tf                  # VPC, EC2 server, backups bucket, IAM, SSM deploy document, GitHub OIDC role
 │   ├── outputs.tf               # Terraform output values
 │   ├── terraform.tf              # Terraform and provider requirements
+│   ├── terraform.tfvars.example  # template for terraform.tfvars, copy and fill in
+│   ├── tests/
+│   │   └── plan.tftest.hcl       # terraform test checks against a mocked AWS provider
 │   ├── user_data.sh.tftpl        # first-boot setup for the server
 │   └── variable.tf               # Terraform variables
 ├── tests/
@@ -127,7 +130,7 @@ aws ssm put-parameter --region $REGION --type SecureString --name $PREFIX/cloudf
 ```
    Postgres only reads its password when the data volume is first created; changing `postgres-password` later also requires `ALTER USER app PASSWORD '...'` in the database.
 
-2. Create `terraform/terraform.tfvars` (gitignored) and apply. `api_domain`, `acme_email`, `repository_url` and `github_repository` are required and have no defaults, so a clone can never trust or deploy another repository; `github_repository` is `owner/name`, not a URL. If the AWS account already has a GitHub OIDC provider, set `create_github_oidc_provider = false`.
+2. Create `terraform/terraform.tfvars` from the example (`cp terraform/terraform.tfvars.example terraform/terraform.tfvars`; it is gitignored), fill it in and apply. `api_domain`, `acme_email`, `repository_url` and `github_repository` are required and have no defaults, so a clone can never trust or deploy another repository; `github_repository` is `owner/name`, not a URL. If the AWS account already has a GitHub OIDC provider, set `create_github_oidc_provider = false`.
 ```hcl
 aws_region        = "eu-north-1"
 project_name      = "task-api"
@@ -202,5 +205,6 @@ GitHub Actions runs on every pull request and push to `main`:
 - **lint**: `ruff check .`
 - **test**: applies migrations to a throwaway PostgreSQL and runs `pytest`. No repository secrets are needed.
 - **build**: builds the Docker image.
+- **terraform**: `terraform fmt -check`, `validate` and `terraform test`, which runs plan-level checks against a mocked AWS provider, so no AWS credentials are needed.
 
 After CI passes on a push to `main`, the **Deploy** workflow assumes the deploy role through GitHub OIDC (no AWS keys in GitHub) and runs the SSM deploy document on the server for that commit. It is skipped until the repository variables from the production setup are set.
