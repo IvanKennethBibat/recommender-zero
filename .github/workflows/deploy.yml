@@ -1,0 +1,67 @@
+name: Deploy
+
+# Runs after CI passes on main (or by hand) and redeploys the server through the SSM deploy document from terraform/.
+# Needs repository variables AWS_DEPLOY_ROLE_ARN, AWS_REGION, DEPLOY_INSTANCE_ID and DEPLOY_DOCUMENT_NAME (terraform output);
+# skipped when they aren't set, so fresh clones of the template don't fail.
+on:
+  workflow_run:
+    workflows: ["Pull Requests CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      vars.AWS_DEPLOY_ROLE_ARN != '' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'))
+    runs-on: ubuntu-latest
+
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      INSTANCE_ID: ${{ vars.DEPLOY_INSTANCE_ID }}
+      DOCUMENT_NAME: ${{ vars.DEPLOY_DOCUMENT_NAME }}
+      COMMIT: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Run deploy on the server
+        run: |
+          command_id=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "$DOCUMENT_NAME" \
+            --parameters "commit=$COMMIT" \
+            --comment "Deploy $COMMIT" \
+            --query Command.CommandId --output text)
+          echo "SSM command $command_id deploying $COMMIT"
+
+          # Poll instead of 'aws ssm wait', which gives up after about 100 seconds; builds can take longer
+          for _ in $(seq 1 180); do
+            sleep 10
+            status=$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$INSTANCE_ID" \
+              --query Status --output text 2>/dev/null || echo Pending)
+            case "$status" in
+              Pending|InProgress|Delayed) continue ;;
+              *) break ;;
+            esac
+          done
+
+          aws ssm get-command-invocation --command-id "$command_id" --instance-id "$INSTANCE_ID" \
+            --query '[StandardOutputContent, StandardErrorContent]' --output text
+          echo "Status: $status"
+          [ "$status" = "Success" ]

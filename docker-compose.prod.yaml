@@ -28,6 +28,12 @@ services:
       - "traefik.http.routers.grafana.tls.certresolver=letsencrypt"
       - "traefik.http.services.grafana.loadbalancer.server.port=3000"
 
+  # Credentials come from the EC2 instance role (see terraform/), so no AWS keys are stored here
+  backup:
+    environment:
+      BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:?set BACKUP_S3_BUCKET in .env (terraform output backup_bucket)}
+      AWS_REGION: ${AWS_REGION:?set AWS_REGION in .env (terraform output aws_region)}
+
   socket-proxy:
     image: tecnativa/docker-socket-proxy:v0.5.0
     container_name: task_socket_proxy
@@ -53,8 +59,12 @@ services:
       - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
       - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:?set ACME_EMAIL in .env}"
       - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
-      - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
-      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+      # DNS challenge through Cloudflare: certificates are issued without inbound traffic, so it works before DNS points here
+      - "--certificatesresolvers.letsencrypt.acme.dnschallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.dnschallenge.provider=cloudflare"
+    environment:
+      # Cloudflare API token with Zone:DNS:Edit on the domain's zone
+      CF_DNS_API_TOKEN: ${CF_DNS_API_TOKEN:?set CF_DNS_API_TOKEN in .env}
     ports:
       - "80:80"
       - "443:443"

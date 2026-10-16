@@ -1,0 +1,33 @@
+#!/bin/bash
+# First-boot setup: install Docker Engine, Compose and the AWS CLI, clone the repo, record the non-secret deploy settings and run the first deploy.
+# Output is in /var/log/cloud-init-output.log. Later deploys come from GitHub Actions through the SSM deploy document.
+set -euxo pipefail
+
+apt-get update
+apt-get install -y ca-certificates curl git python3
+
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+chmod a+r /etc/apt/keyrings/docker.asc
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" > /etc/apt/sources.list.d/docker.list
+
+apt-get update
+apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+systemctl enable --now docker
+
+snap install aws-cli --classic
+
+# Non-secret settings read by deploy/render-env.sh; secrets stay in SSM Parameter Store
+install -m 0755 -d /etc/task-api
+cat > /etc/task-api/deploy.env <<'EOF'
+AWS_REGION=${aws_region}
+SSM_PARAMETER_PREFIX=${ssm_parameter_prefix}
+DOMAIN=${api_domain}
+ACME_EMAIL=${acme_email}
+BACKUP_S3_BUCKET=${backup_bucket}
+EOF
+
+git clone ${repository_url} /opt/task-api
+
+# Fails if the SSM parameters don't exist yet; create them and re-run the deploy workflow
+/opt/task-api/deploy/deploy.sh

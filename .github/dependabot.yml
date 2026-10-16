@@ -10,7 +10,9 @@ updates:
         update-types: [minor, patch]
 
   - package-ecosystem: docker
-    directory: /
+    directories:
+      - /
+      - /backup
     schedule:
       interval: weekly
 
