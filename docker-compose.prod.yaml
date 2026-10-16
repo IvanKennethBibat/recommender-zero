@@ -47,7 +47,7 @@ services:
       - socket-proxy-network
 
   traefik:
-    image: traefik:v3.7.1
+    image: traefik:v3.7.14
     container_name: task_traefik
     restart: unless-stopped
     command:

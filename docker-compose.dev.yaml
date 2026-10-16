@@ -42,7 +42,7 @@ services:
       - socket-proxy-network
 
   traefik:
-    image: traefik:v3.7.1
+    image: traefik:v3.7.14
     restart: unless-stopped
     command:
       - "--providers.docker=true"
