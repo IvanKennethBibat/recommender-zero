@@ -59,8 +59,18 @@ run "creates_oidc_provider" {
     error_message = "Deploy document must refuse commits that aren't on main"
   }
   assert {
-    condition     = strcontains(aws_instance.app.user_data, "BACKUP_S3_BUCKET=task-api-backups-mock") && strcontains(aws_instance.app.user_data, "SSM_PARAMETER_PREFIX=/task-api") && strcontains(aws_instance.app.user_data, "DOMAIN=api.example.com")
-    error_message = "user_data must carry the deploy settings"
+    condition     = strcontains(aws_instance.app.user_data, "SSM_PARAMETER_PREFIX=/task-api") && !strcontains(aws_instance.app.user_data, "DOMAIN=")
+    error_message = "user_data must only say where the settings live, not carry them (they'd drift)"
+  }
+  assert {
+    condition = (
+      aws_ssm_parameter.config["domain"].name == "/task-api/config/domain" &&
+      aws_ssm_parameter.config["domain"].value == "api.example.com" &&
+      aws_ssm_parameter.config["backup-bucket"].value == "task-api-backups-mock" &&
+      aws_ssm_parameter.config["enable-docs"].value == "false" &&
+      aws_ssm_parameter.config["acme-email"].type == "String"
+    )
+    error_message = "Server settings must be plain SSM parameters under <prefix>/config/"
   }
   assert {
     condition     = output.ssm_parameter_names[3] == "/task-api/cloudflare-dns-api-token"

@@ -65,6 +65,12 @@ variable "acme_email" {
   type        = string
 }
 
+variable "enable_docs" {
+  description = "Serve /docs, /redoc and /openapi.json in production; takes effect on the next deploy"
+  type        = bool
+  default     = false
+}
+
 variable "backup_retention_days" {
   description = "Days to keep backup dumps in S3 before they are deleted"
   type        = number

@@ -1,5 +1,5 @@
 #!/bin/bash
-# First-boot setup: install Docker Engine, Compose and the AWS CLI, clone the repo, record the non-secret deploy settings and run the first deploy.
+# First-boot setup: install Docker Engine, Compose and the AWS CLI, clone the repo, record where the settings live and run the first deploy.
 # Output is in /var/log/cloud-init-output.log. Later deploys come from GitHub Actions through the SSM deploy document.
 set -euxo pipefail
 
@@ -17,14 +17,12 @@ systemctl enable --now docker
 
 snap install aws-cli --classic
 
-# Non-secret settings read by deploy/render-env.sh; secrets stay in SSM Parameter Store
+# Only where to find the settings; the settings themselves (and secrets) are read from SSM Parameter Store on every deploy.
+# Both values are fixed for the life of the instance: changing the region or project_name means a new instance.
 install -m 0755 -d /etc/task-api
 cat > /etc/task-api/deploy.env <<'EOF'
 AWS_REGION=${aws_region}
 SSM_PARAMETER_PREFIX=${ssm_parameter_prefix}
-DOMAIN=${api_domain}
-ACME_EMAIL=${acme_email}
-BACKUP_S3_BUCKET=${backup_bucket}
 EOF
 
 git clone ${repository_url} /opt/task-api
