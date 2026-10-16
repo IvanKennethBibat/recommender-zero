@@ -47,6 +47,7 @@ task-api
 │   └── variable.tf               # Terraform variables
 ├── tests/
 │   ├── __init__.py              # test package marker
+│   ├── test_auth.py             # password hashing and auth route tests
 │   └── test_tasks.py            # API test suite
 ├── .env.example                 # template for .env, copy and fill in
 ├── .gitignore                   # ignores local environment and generated files
@@ -57,7 +58,8 @@ task-api
 ├── Dockerfile                   # container image for the FastAPI app
 ├── prometheus.yml               # Prometheus scrape configuration
 ├── readme.md                    # project overview and setup docs
-└── requirements.txt             # Python dependencies
+├── requirements.txt             # runtime Python dependencies (installed in the image)
+└── requirements-dev.txt         # test and lint tools on top of requirements.txt
 ```
 
 ### Tech Stack
@@ -112,7 +114,7 @@ Tests need a running PostgreSQL with migrations applied, plus `DATABASE_URL` and
 ```bash
     python3 -m venv venv
     source venv/bin/activate
-    pip install -r requirements.txt
+    pip install -r requirements-dev.txt
     pytest
 ```
 
@@ -123,8 +125,9 @@ Development:
 - **Prometheus**: http://localhost/prometheus
 
 Production (HTTPS only, HTTP redirects):
-- **API docs**: https://DOMAIN/docs
+- **API**: https://DOMAIN
 - **Grafana**: https://DOMAIN/grafana
+- `/docs`, `/redoc` and `/openapi.json` are disabled. They are only served when `ENABLE_DOCS=true`, which the dev overlay sets; add it to `.env` to enable them in production.
 - Prometheus and `/metrics` are not exposed publicly; Prometheus scrapes the API over the internal Docker network.
 
 `/login` and `/register` are rate-limited by Traefik to 5 requests per minute per IP.
