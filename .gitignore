@@ -5,3 +5,7 @@ venv/
 *.tfstate
 *.tfstate.*
 terraform/terraform.tfvars
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
