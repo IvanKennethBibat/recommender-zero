@@ -70,7 +70,7 @@ services:
       - default
 
   prometheus:
-    image: prom/prometheus:v3.11.3
+    image: prom/prometheus:v3.15.0
     container_name: task_prometheus
     restart: unless-stopped
     command:
