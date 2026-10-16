@@ -15,6 +15,7 @@ REST API built using FastAPI and PostgreSQL, using Docker to containerise the ap
 task-api
 ├── .github/
 │   ├── workflows/
+│   │   ├── deploy.yml            # deploys main to the AWS server via SSM after CI passes
 │   │   └── pull_requests.yml     # CI lint, migrations, tests and image build
 │   └── dependabot.yml            # weekly dependency, image and action updates
 ├── alembic/
@@ -23,6 +24,12 @@ task-api
 │   ├── env.py                    # Alembic environment configuration
 │   ├── README                    # Alembic migration notes
 │   └── script.py.mako            # migration revision template
+├── backup/
+│   ├── backup.sh                 # scheduled pg_dump, pruning and optional S3 upload
+│   └── Dockerfile                # Postgres client + AWS CLI image for the backup service
+├── deploy/
+│   ├── deploy.sh                 # server-side redeploy of the checked-out commit
+│   └── render-env.sh             # writes the production .env from SSM Parameter Store
 ├── app/
 │   ├── __init__.py              # package marker
 │   ├── auth.py                  # JWT + password utilities
@@ -41,9 +48,10 @@ task-api
 │       └── datasources/
 │           └── datasource.yml    # Prometheus data source
 ├── terraform/
-│   ├── main.tf                  # Terraform AWS configuration
+│   ├── main.tf                  # VPC, EC2 server, backups bucket, IAM, SSM deploy document, GitHub OIDC role
 │   ├── outputs.tf               # Terraform output values
 │   ├── terraform.tf              # Terraform and provider requirements
+│   ├── user_data.sh.tftpl        # first-boot setup for the server
 │   └── variable.tf               # Terraform variables
 ├── tests/
 │   ├── __init__.py              # test package marker
@@ -52,9 +60,9 @@ task-api
 ├── .env.example                 # template for .env, copy and fill in
 ├── .gitignore                   # ignores local environment and generated files
 ├── alembic.ini                  # Alembic configuration
-├── compose.yaml                 # base services: db, migrate, api, prometheus, grafana
+├── compose.yaml                 # base services: db, backup, migrate, api, prometheus, grafana
 ├── docker-compose.dev.yaml      # dev overlay: Traefik on localhost over HTTP
-├── docker-compose.prod.yaml     # prod overlay: Traefik with HTTPS via Let's Encrypt
+├── docker-compose.prod.yaml     # prod overlay: HTTPS via Let's Encrypt (Cloudflare DNS), S3 backups
 ├── Dockerfile                   # container image for the FastAPI app
 ├── prometheus.yml               # Prometheus scrape configuration
 ├── readme.md                    # project overview and setup docs
@@ -95,19 +103,69 @@ task-api
 docker compose -f compose.yaml -f docker-compose.dev.yaml up -d
 ```
 
-#### Production
-3. In `.env`, also set `DOMAIN` (bare hostname, e.g. `api.example.com`), `ACME_EMAIL` for Let's Encrypt, and `GF_SERVER_ROOT_URL=https://<DOMAIN>/grafana`. Point the domain's DNS at the server and open ports 80 and 443.
+#### Production (AWS)
+Terraform provisions the infrastructure; the server builds and runs the same compose stack with the prod overlay. Secrets live in SSM Parameter Store and are never stored in Terraform state or the repo.
 
-4. Start the stack.
+What `terraform/` creates: a VPC with one public subnet, an ARM (Graviton) EC2 instance running Ubuntu 24.04 with an Elastic IP, a security group open only on 80 and 443 (no SSH; shell access is through SSM Session Manager), a private encrypted S3 bucket for backups, an instance role, an SSM document that deploys a given commit, and a GitHub Actions OIDC role that can run only that document on that instance.
+
+Prerequisites: AWS CLI with the Session Manager plugin, Terraform >= 1.5, the domain's DNS in Cloudflare, and a Cloudflare API token with `Zone:DNS:Edit` on that zone.
+
+1. Create the secrets as SSM SecureStrings under `/<project_name>/` (default `/task-api/`) in the region you deploy to. Values must not contain a single quote or newline; hex from `openssl rand` is safest.
 ```bash
-docker compose -f compose.yaml -f docker-compose.prod.yaml up -d
+REGION=eu-north-1 PREFIX=/task-api
+aws ssm put-parameter --region $REGION --type SecureString --name $PREFIX/secret-key --value "$(openssl rand -hex 32)"
+aws ssm put-parameter --region $REGION --type SecureString --name $PREFIX/postgres-password --value "$(openssl rand -hex 24)"
+aws ssm put-parameter --region $REGION --type SecureString --name $PREFIX/grafana-admin-password --value "$(openssl rand -hex 16)"
+aws ssm put-parameter --region $REGION --type SecureString --name $PREFIX/cloudflare-dns-api-token --value '<cloudflare token>'
 ```
+   Postgres only reads its password when the data volume is first created; changing `postgres-password` later also requires `ALTER USER app PASSWORD '...'` in the database.
+
+2. Create `terraform/terraform.tfvars` (gitignored) and apply. `api_domain` and `acme_email` are required; also set `repository_url` and `github_repository` to your fork. If the AWS account already has a GitHub OIDC provider, set `create_github_oidc_provider = false`.
+```hcl
+aws_region        = "eu-north-1"
+project_name      = "task-api"
+api_domain        = "api.example.com"
+acme_email        = "you@example.com"
+repository_url    = "https://github.com/YOUR_ORG/YOUR_REPO.git"
+github_repository = "YOUR_ORG/YOUR_REPO"
+```
+```bash
+cd terraform
+terraform init
+terraform apply
+```
+
+3. In Cloudflare, add an `A` record for `api_domain` pointing at `terraform output public_ip`. Certificates are issued through the Cloudflare DNS challenge, so this can happen before or after the server is up.
+
+4. On first boot the server installs Docker, clones the repo and deploys. Follow it with:
+```bash
+$(terraform output -raw ssm_session_command)
+sudo tail -f /var/log/cloud-init-output.log
+```
+
+5. For automatic deploys, add these GitHub repository variables (Settings → Secrets and variables → Actions → Variables) from the Terraform outputs: `AWS_DEPLOY_ROLE_ARN` (`github_deploy_role_arn`), `AWS_REGION` (`aws_region`), `DEPLOY_INSTANCE_ID` (`instance_id`), `DEPLOY_DOCUMENT_NAME` (`deploy_document_name`). From then on, every push to `main` that passes CI is deployed; the Deploy workflow can also be run by hand.
+
+The non-secret server settings (domain, bucket, region, `ENABLE_DOCS`) are in `/etc/task-api/deploy.env` on the server. It is only written on first boot, so edit it there to change them, then redeploy. To deploy by hand from an SSM session: `sudo /opt/task-api/deploy/deploy.sh` (deploys the checked-out commit).
+
+If you turn on Cloudflare's proxy (orange cloud), Traefik sees Cloudflare's IPs instead of clients', so the `/login` and `/register` rate limit applies per Cloudflare edge rather than per user.
 
 #### Database migrations
 The `migrate` service runs `alembic upgrade head` on every `up` and exits; the API waits for it and does not start if a migration fails (check `docker compose logs migrate`). When you change `app/models.py`, generate a new migration and commit it:
 ```bash
 alembic revision --autogenerate -m "describe the change"
 ```
+
+#### Backups
+The `backup` service runs `pg_dump` every `BACKUP_INTERVAL_SECONDS` (default daily) into the `backup_data` volume and deletes local dumps older than `BACKUP_KEEP_DAYS` (default 7). In production it also uploads each dump to the S3 bucket from Terraform, which keeps them for `backup_retention_days` (default 30). Check it with `docker compose logs backup`.
+
+To restore, stop the API, restore a dump, and start it again (add `-f compose.yaml -f docker-compose.<dev|prod>.yaml` to each command):
+```bash
+docker compose exec backup ls /backups
+docker compose stop api
+docker compose exec backup sh -c 'pg_restore --clean --if-exists --no-owner --dbname="$PGDATABASE" /backups/<file>.dump'
+docker compose start api
+```
+To restore from S3 in production, first copy the dump into the volume: `docker compose exec backup aws s3 cp s3://<bucket>/<file>.dump /backups/`.
 
 #### Running tests locally
 Tests need a running PostgreSQL with migrations applied, plus `DATABASE_URL` and `SECRET_KEY` in the environment.
@@ -127,7 +185,7 @@ Development:
 Production (HTTPS only, HTTP redirects):
 - **API**: https://DOMAIN
 - **Grafana**: https://DOMAIN/grafana
-- `/docs`, `/redoc` and `/openapi.json` are disabled. They are only served when `ENABLE_DOCS=true`, which the dev overlay sets; add it to `.env` to enable them in production.
+- `/docs`, `/redoc` and `/openapi.json` are disabled. They are only served when `ENABLE_DOCS=true`, which the dev overlay sets; to enable them in production, add `ENABLE_DOCS=true` to `/etc/task-api/deploy.env` on the server and redeploy.
 - Prometheus and `/metrics` are not exposed publicly; Prometheus scrapes the API over the internal Docker network.
 
 `/login` and `/register` are rate-limited by Traefik to 5 requests per minute per IP.
@@ -137,3 +195,5 @@ GitHub Actions runs on every pull request and push to `main`:
 - **lint**: `ruff check .`
 - **test**: applies migrations to a throwaway PostgreSQL and runs `pytest`. No repository secrets are needed.
 - **build**: builds the Docker image.
+
+After CI passes on a push to `main`, the **Deploy** workflow assumes the deploy role through GitHub OIDC (no AWS keys in GitHub) and runs the SSM deploy document on the server for that commit. It is skipped until the repository variables from the production setup are set.
