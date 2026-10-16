@@ -1,0 +1,8 @@
+# Copy to backend.hcl (gitignored), or generate it from the bootstrap config:
+#   cd terraform/bootstrap && terraform output -raw backend_config > ../backend.hcl
+# then: terraform init -backend-config=backend.hcl
+bucket       = "task-api-tfstate-XXXXXXXX"
+key          = "task-api/terraform.tfstate"
+region       = "eu-north-1"
+encrypt      = true
+use_lockfile = true

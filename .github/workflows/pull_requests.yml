@@ -111,3 +111,8 @@ jobs:
 
       - name: Test
         run: terraform test
+
+      - name: Validate bootstrap
+        run: |
+          terraform -chdir=bootstrap init -backend=false -input=false
+          terraform -chdir=bootstrap validate
