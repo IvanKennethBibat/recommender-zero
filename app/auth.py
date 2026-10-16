@@ -25,6 +25,9 @@ if not SECRET_KEY or len(SECRET_KEY) < 32:
 def hash_password(password: str) -> str:
     return password_hasher.hash(password)
 
+# Verified against on logins for unknown usernames, so they cost the same as a real check
+DUMMY_PASSWORD_HASH = hash_password("dummy-password-for-timing")
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     try:
         return password_hasher.verify(hashed_password, plain_password)

@@ -1,3 +1,5 @@
+import os
+
 from fastapi import FastAPI, HTTPException
 from prometheus_fastapi_instrumentator import Instrumentator
 from sqlalchemy import text
@@ -6,7 +8,14 @@ from sqlalchemy.exc import SQLAlchemyError
 from app import routes, user_routes
 from app.database import engine
 
-app = FastAPI()
+# Interactive docs and the OpenAPI schema are off unless explicitly enabled (the dev overlay turns them on)
+ENABLE_DOCS = os.getenv("ENABLE_DOCS", "false").lower() == "true"
+
+app = FastAPI(
+    docs_url="/docs" if ENABLE_DOCS else None,
+    redoc_url="/redoc" if ENABLE_DOCS else None,
+    openapi_url="/openapi.json" if ENABLE_DOCS else None,
+)
 
 Instrumentator().instrument(app).expose(app)
 

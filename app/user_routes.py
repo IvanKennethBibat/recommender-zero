@@ -1,9 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import models, schemas
 from app.auth import (
+    DUMMY_PASSWORD_HASH,
     create_access_token,
     hash_password,
     password_needs_rehash,
@@ -15,15 +17,17 @@ router = APIRouter()
 
 @router.post("/register", response_model=schemas.UserResponse)
 def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
-    existing_user = db.query(models.User).filter(models.User.username == user.username).first()
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Username already exists")
     new_user = models.User(
         username=user.username,
         hashed_password=hash_password(user.password)
     )
     db.add(new_user)
-    db.commit()
+    # Rely on the unique constraint rather than a pre-check, so concurrent signups for the same name get a 400 instead of a 500
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Username already exists")
     db.refresh(new_user)
     return new_user
 
@@ -36,7 +40,11 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
     if len(form_data.password) > schemas.PASSWORD_MAX_LENGTH:
         raise invalid_credentials
     user = db.query(models.User).filter(models.User.username == form_data.username).first()
-    if not user or not verify_password(form_data.password, user.hashed_password):
+    if user is None:
+        # Hash anyway so unknown usernames take as long as wrong passwords and can't be enumerated by timing
+        verify_password(form_data.password, DUMMY_PASSWORD_HASH)
+        raise invalid_credentials
+    if not verify_password(form_data.password, user.hashed_password):
         raise invalid_credentials
     if password_needs_rehash(user.hashed_password):
         user.hashed_password = hash_password(form_data.password)
