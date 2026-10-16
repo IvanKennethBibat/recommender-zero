@@ -8,18 +8,31 @@ updates:
     groups:
       python-minor-and-patch:
         update-types: [minor, patch]
+        # SQLAlchemy minor releases can change behaviour (2.1 switched the default Postgres driver), and the
+        # psycopg driver moves with it, so they get their own PRs instead of riding along with routine bumps
+        exclude-patterns:
+          - "sqlalchemy"
+          - "psycopg*"
 
+  # Postgres major upgrades can't read the old data volume and need a dump-and-restore, with the db and backup
+  # images moved together, so they're done by hand rather than proposed here
   - package-ecosystem: docker
     directories:
       - /
       - /backup
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: postgres
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: docker-compose
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: postgres
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
