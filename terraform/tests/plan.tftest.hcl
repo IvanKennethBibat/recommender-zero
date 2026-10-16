@@ -29,7 +29,11 @@ mock_provider "aws" {
   }
 }
 
+# Every input the assertions depend on is set here, so a local terraform.tfvars can't change the results
 variables {
+  aws_region        = "eu-north-1"
+  project_name      = "task-api"
+  instance_type     = "t4g.small"
   api_domain        = "api.example.com"
   acme_email        = "ops@example.com"
   repository_url    = "https://github.com/my-org/my-app.git"
@@ -49,6 +53,10 @@ run "creates_oidc_provider" {
   assert {
     condition     = jsondecode(aws_ssm_document.deploy.content).parameters.commit.allowedPattern == "^[0-9a-f]{40}$"
     error_message = "Deploy document must only accept a full commit SHA"
+  }
+  assert {
+    condition     = anytrue([for c in jsondecode(aws_ssm_document.deploy.content).mainSteps[0].inputs.runCommand : startswith(c, "git merge-base --is-ancestor {{ commit }} origin/main")])
+    error_message = "Deploy document must refuse commits that aren't on main"
   }
   assert {
     condition     = strcontains(aws_instance.app.user_data, "BACKUP_S3_BUCKET=task-api-backups-mock") && strcontains(aws_instance.app.user_data, "SSM_PARAMETER_PREFIX=/task-api") && strcontains(aws_instance.app.user_data, "DOMAIN=api.example.com")
