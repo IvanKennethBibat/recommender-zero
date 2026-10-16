@@ -2,7 +2,7 @@ services:
   api:
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.api.rule=Host(`${DOMAIN:?set DOMAIN in .env}`) && !PathPrefix(`/metrics`) && !PathPrefix(`/grafana`)"
+      - "traefik.http.routers.api.rule=Host(`${DOMAIN:?set DOMAIN in .env}`) && !PathPrefix(`/metrics`)"
       - "traefik.http.routers.api.entrypoints=websecure"
       - "traefik.http.routers.api.tls=true"
       - "traefik.http.routers.api.tls.certresolver=letsencrypt"
@@ -19,14 +19,15 @@ services:
       - "traefik.http.middlewares.auth-ratelimit.ratelimit.burst=5"
       - "traefik.http.services.api.loadbalancer.server.port=8000"
 
+  # Grafana and Prometheus aren't routed through Traefik in production: they listen on the server's loopback only,
+  # and are reached through an SSM port-forwarding session (see README), so no admin login is exposed publicly
   grafana:
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.grafana.rule=Host(`${DOMAIN:?set DOMAIN in .env}`) && PathPrefix(`/grafana`)"
-      - "traefik.http.routers.grafana.entrypoints=websecure"
-      - "traefik.http.routers.grafana.tls=true"
-      - "traefik.http.routers.grafana.tls.certresolver=letsencrypt"
-      - "traefik.http.services.grafana.loadbalancer.server.port=3000"
+    ports:
+      - "127.0.0.1:3000:3000"
+
+  prometheus:
+    ports:
+      - "127.0.0.1:9090:9090"
 
   # Credentials come from the EC2 instance role (see terraform/), so no AWS keys are stored here
   backup:
