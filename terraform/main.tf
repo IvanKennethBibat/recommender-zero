@@ -289,7 +289,7 @@ resource "aws_ssm_document" "deploy" {
 
   content = jsonencode({
     schemaVersion = "2.2"
-    description   = "Check out a commit in /opt/task-api and redeploy the compose stack"
+    description   = "Check out a commit from main in /opt/task-api and redeploy the compose stack"
     parameters = {
       commit = {
         type           = "String"
@@ -306,6 +306,9 @@ resource "aws_ssm_document" "deploy" {
           "set -eu",
           "cd /opt/task-api",
           "git fetch --quiet origin",
+          # Only commits already on main can be deployed (including older ones, for rollbacks), never unmerged branches
+          "git merge-base --is-ancestor {{ commit }} origin/main || { echo 'Refusing to deploy {{ commit }}: not on origin/main' >&2; exit 1; }",
+          "echo \"Previously deployed: $(git rev-parse HEAD) (run Deploy with this SHA to roll back)\"",
           "git checkout --quiet --detach {{ commit }}",
           "./deploy/deploy.sh",
         ]
