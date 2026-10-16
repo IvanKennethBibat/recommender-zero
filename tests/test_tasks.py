@@ -49,3 +49,24 @@ def test_delete_task(auth_headers):
     client.delete(f"/tasks/{task_id}", headers=auth_headers)
     response = client.get(f"/tasks/{task_id}", headers=auth_headers)
     assert response.status_code == 404
+
+def test_create_task_rejects_empty_and_long_titles(auth_headers):
+    assert client.post("/tasks", json={"title": ""}, headers=auth_headers).status_code == 422
+    assert client.post("/tasks", json={"title": "x" * 201}, headers=auth_headers).status_code == 422
+
+
+def test_get_tasks_rejects_out_of_range_pagination(auth_headers):
+    assert client.get("/tasks?limit=1000", headers=auth_headers).status_code == 422
+    assert client.get("/tasks?limit=0", headers=auth_headers).status_code == 422
+    assert client.get("/tasks?skip=-1", headers=auth_headers).status_code == 422
+
+
+def test_register_rejects_invalid_usernames_and_long_passwords():
+    assert client.post("/register", json={"username": "ab", "password": "TestPassword!"}).status_code == 422
+    assert client.post("/register", json={"username": "bad name", "password": "TestPassword!"}).status_code == 422
+    assert client.post("/register", json={"username": "longpw", "password": "!" + "x" * 128}).status_code == 422
+
+
+def test_login_rejects_oversized_password():
+    response = client.post("/login", data={"username": "testuser", "password": "x" * 129})
+    assert response.status_code == 401
