@@ -1,6 +1,4 @@
-# Task API
-
-A production-style reference deployment of a small REST API, built to be the starting point for my own projects. The example domain is a task list with user accounts; the parts worth reusing are everything around it: auth, migrations, observability, backups, CI, infrastructure as code and keyless deploys, all of which I can explain end to end.
+# Recommender-zero
 
 - **App**: FastAPI + PostgreSQL (SQLAlchemy, Alembic), argon2 password hashing, JWT auth, input limits, rate-limited login.
 - **Runtime**: one Docker Compose stack for dev and prod (Traefik, Prometheus, Grafana, scheduled backups), with environment differences kept in small overlays.
