@@ -14,8 +14,9 @@ REST API built using FastAPI and PostgreSQL, using Docker to containerise the ap
 ```text
 task-api
 ├── .github/
-│   └── workflows/
-│       └── pull_requests.yml     # CI migrations and test validation
+│   ├── workflows/
+│   │   └── pull_requests.yml     # CI lint, migrations, tests and image build
+│   └── dependabot.yml            # weekly dependency, image and action updates
 ├── alembic/
 │   ├── versions/
 │   │   └── e30f5768187a_initial_schema.py # initial database schema
@@ -28,9 +29,9 @@ task-api
 │   ├── database.py              # SQLAlchemy engine, session, DB config
 │   ├── main.py                  # FastAPI app bootstrap and health routes
 │   ├── models.py                # User and Task ORM models
-│   ├── routes.py                # authentication endpoints
+│   ├── routes.py                # task CRUD API routes
 │   ├── schemas.py               # Pydantic request/response models
-│   └── user_routes.py           # task CRUD API routes
+│   └── user_routes.py           # authentication endpoints
 ├── grafana/
 │   ├── dashboards/
 │   │   └── api-overview.json     # provisioned API metrics dashboard
@@ -47,10 +48,13 @@ task-api
 ├── tests/
 │   ├── __init__.py              # test package marker
 │   └── test_tasks.py            # API test suite
+├── .env.example                 # template for .env, copy and fill in
 ├── .gitignore                   # ignores local environment and generated files
 ├── alembic.ini                  # Alembic configuration
+├── compose.yaml                 # base services: db, api, prometheus, grafana
+├── docker-compose.dev.yaml      # dev overlay: Traefik on localhost over HTTP
+├── docker-compose.prod.yaml     # prod overlay: Traefik with HTTPS via Let's Encrypt
 ├── Dockerfile                   # container image for the FastAPI app
-├── docker-compose.yml           # multi-service local deployment stack
 ├── prometheus.yml               # Prometheus scrape configuration
 ├── readme.md                    # project overview and setup docs
 └── requirements.txt             # Python dependencies
@@ -70,48 +74,59 @@ task-api
 
 
 ### Startup
+`compose.yaml` holds the shared services and is always combined with an overlay: `docker-compose.dev.yaml` for local work or `docker-compose.prod.yaml` for a server. Running `docker compose up` on `compose.yaml` alone starts no Traefik, so the API is unreachable.
+
 1. Clone the repo
 ```bash
     git clone https://github.com/IvanKennethBibat/task-api
     cd task-api
 ```
 
-2. Create the venv
+2. Create `.env` from the example and replace every value. Generate `SECRET_KEY` with `openssl rand -hex 32`; the API refuses to start if it is shorter than 32 characters. Compose stops with an error if a required value is missing.
+```bash
+    cp .env.example .env
+```
+
+#### Development
+3. Apply migrations, then start the stack. Traefik listens on `127.0.0.1:80` only.
+```bash
+docker compose -f compose.yaml -f docker-compose.dev.yaml run --rm api alembic upgrade head
+docker compose -f compose.yaml -f docker-compose.dev.yaml up -d
+```
+
+#### Production
+3. In `.env`, also set `DOMAIN` (bare hostname, e.g. `api.example.com`), `ACME_EMAIL` for Let's Encrypt, and `GF_SERVER_ROOT_URL=https://<DOMAIN>/grafana`. Point the domain's DNS at the server and open ports 80 and 443.
+
+4. Apply migrations, then start the stack. Run the migration step again on every deploy that adds a migration.
+```bash
+docker compose -f compose.yaml -f docker-compose.prod.yaml run --rm api alembic upgrade head
+docker compose -f compose.yaml -f docker-compose.prod.yaml up -d
+```
+
+#### Running tests locally
+Tests need a running PostgreSQL with migrations applied, plus `DATABASE_URL` and `SECRET_KEY` in the environment.
 ```bash
     python3 -m venv venv
     source venv/bin/activate
-```
-3. Install required dependencies
-```bash
     pip install -r requirements.txt
-```
-
-4. Create `.env` in root, example values below. Replace the values with your own.
-```bash 
-    POSTGRES_USER=taskuser
-    POSTGRES_PASSWORD=replace-with-a-local-password
-    POSTGRES_DB=taskdb
-    DATABASE_URL=postgresql://taskuser:replace-with-a-local-password@db:5432/taskdb
-
-    SECRET_KEY=replace-with-output-of-openssl-rand-hex-32
-    ALGORITHM=HS256
-    ACCESS_TOKEN_EXPIRE_MINUTES=30
-
-    GF_SECURITY_ADMIN_PASSWORD=replace-with-a-local-password
-    GF_SERVER_ROOT_URL=http://localhost/grafana/
-```
-
-5. Start the application
-```bash
-docker compose run --rm api alembic upgrade head
-docker compose up -d
+    pytest
 ```
 
 ### API Endpoints
-- **API**: http://localhost/docs
+Development:
+- **API docs**: http://localhost/docs
 - **Grafana**: http://localhost/grafana
 - **Prometheus**: http://localhost/prometheus
-- **Traefik**: http://localhost:80
+
+Production (HTTPS only, HTTP redirects):
+- **API docs**: https://DOMAIN/docs
+- **Grafana**: https://DOMAIN/grafana
+- Prometheus and `/metrics` are not exposed publicly; Prometheus scrapes the API over the internal Docker network.
+
+`/login` and `/register` are rate-limited by Traefik to 5 requests per minute per IP.
 
 ### CI/CD Pipeline
-GitHub Actions tests each API Endpoint after each code commit, ensuring each feature works as expected.
+GitHub Actions runs on every pull request and push to `main`:
+- **lint**: `ruff check .`
+- **test**: applies migrations to a throwaway PostgreSQL and runs `pytest`. No repository secrets are needed.
+- **build**: builds the Docker image.
