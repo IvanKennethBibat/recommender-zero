@@ -43,13 +43,13 @@ flowchart LR
 - **What I'd change at scale**: move Postgres to RDS (managed backups, point-in-time recovery, Multi-AZ), build images once in CI and push them to ECR, run the API on ECS Fargate or several instances behind a load balancer for zero-downtime deploys, and add alerting.
 - **No SSH, no long-lived keys.** Port 22 is closed; shell access and deploys go through SSM. GitHub gets short-lived credentials through OIDC for a role that can only run one deploy document on one instance, and that document only accepts a commit already on `main`.
 - **Secrets only in SSM Parameter Store.** Terraform knows the parameter path, never the values, so neither state nor the repo holds secrets; the server writes `.env` from SSM on every deploy.
+- **Server settings come from Terraform too.** Domain, ACME email, backup bucket and the docs flag are Terraform-managed SSM parameters under `/<project_name>/config/`, read on every deploy, so the server holds no hand-edited configuration.
+- **Shared, versioned Terraform state.** State lives in a versioned, encrypted S3 bucket with S3-native locking, created by a small bootstrap config, so anyone with access can run Terraform and a bad apply can be rolled back to an earlier state version.
 - **Failure budget.** Backups run daily, so losing the instance loses up to 24 hours of writes (shorten `BACKUP_INTERVAL_SECONDS` for less). Recovery means `terraform apply` for a new server, then restoring the latest dump from S3; this is manual.
 
 ### Known limitations
 Kept here deliberately, in the order I'd tackle them:
 - **The deployed image isn't the tested one.** CI builds an x86 image and discards it; the ARM server builds its own from the same commit. Next step: build arm64 in CI, push to ECR, deploy by digest.
-- **Server settings drift.** Non-secret settings (domain, bucket, `ENABLE_DOCS`) are written to `/etc/task-api/deploy.env` once at first boot and edited by hand afterwards. Next step: Terraform-managed SSM parameters, read on every deploy like the secrets.
-- **Terraform state is local.** Only whoever holds `terraform.tfstate` can change the infrastructure. Next step: an S3 backend with state locking.
 - **Metrics without alerts.** Prometheus and Grafana show what happened, but nothing pages anyone. Next step: Grafana alerting to email or Slack.
 - **Rollbacks don't undo migrations.** Write migrations that the previous release can still run against (add columns before using them, drop them a release later), or restore a backup.
 
@@ -91,7 +91,10 @@ task-api
 │       └── datasources/
 │           └── datasource.yml    # Prometheus data source
 ├── terraform/
-│   ├── main.tf                  # VPC, EC2 server, backups bucket, IAM, SSM deploy document, GitHub OIDC role
+│   ├── backend.hcl.example       # template for backend.hcl (state bucket settings)
+│   ├── bootstrap/
+│   │   └── main.tf               # one-off: S3 bucket for Terraform state
+│   ├── main.tf                  # VPC, EC2 server, backups bucket, IAM, SSM parameters and deploy document, GitHub OIDC role
 │   ├── outputs.tf               # Terraform output values
 │   ├── terraform.tf              # Terraform and provider requirements
 │   ├── terraform.tfvars.example  # template for terraform.tfvars, copy and fill in
@@ -161,7 +164,7 @@ Terraform provisions the infrastructure; the server builds and runs the same com
 
 What `terraform/` creates: a VPC with one public subnet, an ARM (Graviton) EC2 instance running Ubuntu 24.04 with an Elastic IP, a security group open only on 80 and 443 (no SSH; shell access is through SSM Session Manager), a private encrypted S3 bucket for backups, an instance role, an SSM document that deploys a given commit, and a GitHub Actions OIDC role that can run only that document on that instance.
 
-Prerequisites: AWS CLI with the Session Manager plugin, Terraform >= 1.5, the domain's DNS in Cloudflare, and a Cloudflare API token with `Zone:DNS:Edit` on that zone.
+Prerequisites: AWS CLI with the Session Manager plugin, Terraform >= 1.10, the domain's DNS in Cloudflare, and a Cloudflare API token with `Zone:DNS:Edit` on that zone.
 
 1. Create the secrets as SSM SecureStrings under `/<project_name>/` (default `/task-api/`) in the region you deploy to. Values must not contain a single quote or newline; hex from `openssl rand` is safest.
 ```bash
@@ -182,9 +185,17 @@ acme_email        = "you@example.com"
 repository_url    = "https://github.com/YOUR_ORG/YOUR_REPO.git"
 github_repository = "YOUR_ORG/YOUR_REPO"
 ```
+   First create the state bucket, once per project (use the same `aws_region` and `project_name` as in `terraform.tfvars`). Its own state is local and only covers this bucket, which is protected from `terraform destroy`:
 ```bash
-cd terraform
+cd terraform/bootstrap
 terraform init
+terraform apply -var aws_region=eu-north-1 -var project_name=task-api
+terraform output -raw backend_config > ../backend.hcl
+```
+   Then initialise the main configuration against that bucket and apply:
+```bash
+cd ..
+terraform init -backend-config=backend.hcl
 terraform apply
 ```
 
@@ -208,7 +219,7 @@ $(terraform output -raw grafana_tunnel_command)   # then http://localhost:3000/g
 ```
 Log in as `admin` with the `grafana-admin-password` parameter. For Prometheus, run the same command with `portNumber=9090,localPortNumber=9090` and open http://localhost:9090/prometheus.
 
-The non-secret server settings (domain, bucket, region, `ENABLE_DOCS`) are in `/etc/task-api/deploy.env` on the server. It is only written on first boot, so edit it there to change them, then redeploy. To deploy by hand from an SSM session: `sudo /opt/task-api/deploy/deploy.sh` (deploys the checked-out commit).
+Server settings (domain, ACME email, backup bucket, `enable_docs`) are Terraform-managed SSM parameters under `/<project_name>/config/`. To change one, edit `terraform.tfvars`, run `terraform apply`, then redeploy. The only file on the server, `/etc/task-api/deploy.env`, holds the region and parameter prefix. To deploy by hand from an SSM session: `sudo /opt/task-api/deploy/deploy.sh` (deploys the checked-out commit).
 
 If you turn on Cloudflare's proxy (orange cloud), Traefik sees Cloudflare's IPs instead of clients', so the `/login` and `/register` rate limit applies per Cloudflare edge rather than per user.
 
@@ -248,7 +259,7 @@ Development:
 Production (HTTPS only, HTTP redirects):
 - **API**: https://DOMAIN
 - **Grafana and Prometheus**: through an SSM tunnel only (see Production).
-- `/docs`, `/redoc` and `/openapi.json` are disabled. They are only served when `ENABLE_DOCS=true`, which the dev overlay sets; to enable them in production, add `ENABLE_DOCS=true` to `/etc/task-api/deploy.env` on the server and redeploy.
+- `/docs`, `/redoc` and `/openapi.json` are disabled. They are only served when `ENABLE_DOCS=true`, which the dev overlay sets; to enable them in production, set `enable_docs = true` in `terraform.tfvars`, run `terraform apply`, then redeploy.
 - `/metrics` is not exposed publicly; Prometheus scrapes the API over the internal Docker network.
 
 `/login` and `/register` are rate-limited by Traefik to 5 requests per minute per IP.
@@ -258,6 +269,6 @@ GitHub Actions runs on every pull request and push to `main`:
 - **lint**: `ruff check .`
 - **test**: applies migrations to a throwaway PostgreSQL and runs `pytest`. No repository secrets are needed.
 - **build**: builds the Docker image.
-- **terraform**: `terraform fmt -check`, `validate` and `terraform test`, which runs plan-level checks against a mocked AWS provider, so no AWS credentials are needed.
+- **terraform**: `terraform fmt -check`, `validate` and `terraform test`, which runs plan-level checks against a mocked AWS provider, so no AWS credentials are needed; the bootstrap config is validated too.
 
 After CI passes on a push to `main`, the **Deploy** workflow assumes the deploy role through GitHub OIDC (no AWS keys in GitHub), runs the SSM deploy document on the server for that commit, and then checks `DEPLOY_HEALTH_URL` if it's set. It can also be run by hand with a `commit` to roll back. It is skipped until the repository variables from the production setup are set.

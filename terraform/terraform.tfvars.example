@@ -14,4 +14,5 @@ github_repository = "YOUR_ORG/YOUR_REPO"
 # root_volume_size            = 20
 # vpc_cidr                    = "10.0.0.0/16"
 # backup_retention_days       = 30
+# enable_docs                 = false
 # create_github_oidc_provider = true

@@ -19,6 +19,22 @@ locals {
   # Secrets live here as SSM SecureStrings created by hand; Terraform only knows the path, never the values
   ssm_parameter_prefix = "/${var.project_name}"
   ssm_parameter_arn    = "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${local.ssm_parameter_prefix}/*"
+
+  # Non-secret server settings, read by deploy/render-env.sh on every deploy, so changing them is terraform apply + redeploy
+  server_config = {
+    "domain"        = var.api_domain
+    "acme-email"    = var.acme_email
+    "backup-bucket" = aws_s3_bucket.backups.bucket
+    "enable-docs"   = tostring(var.enable_docs)
+  }
+}
+
+resource "aws_ssm_parameter" "config" {
+  for_each = local.server_config
+
+  name  = "${local.ssm_parameter_prefix}/config/${each.key}"
+  type  = "String"
+  value = each.value
 }
 
 # Network: one public subnet; only the EC2 instance lives here
@@ -242,9 +258,6 @@ resource "aws_instance" "app" {
     repository_url       = var.repository_url
     aws_region           = var.aws_region
     ssm_parameter_prefix = local.ssm_parameter_prefix
-    api_domain           = var.api_domain
-    acme_email           = var.acme_email
-    backup_bucket        = aws_s3_bucket.backups.bucket
   })
 
   metadata_options {
@@ -263,6 +276,9 @@ resource "aws_instance" "app" {
   lifecycle {
     ignore_changes = [ami, user_data]
   }
+
+  # The first-boot deploy reads these
+  depends_on = [aws_ssm_parameter.config]
 
   tags = {
     Name = "${var.project_name}-app"

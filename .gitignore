@@ -8,6 +8,7 @@ venv/
 *.tfstate
 *.tfstate.*
 terraform/terraform.tfvars
+terraform/backend.hcl
 __pycache__/
 *.pyc
 .pytest_cache/
