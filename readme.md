@@ -1,14 +1,57 @@
 # Task API
 
-### Problem Statement
+A production-style reference deployment of a small REST API, built to be the starting point for my own projects. The example domain is a task list with user accounts; the parts worth reusing are everything around it: auth, migrations, observability, backups, CI, infrastructure as code and keyless deploys, all of which I can explain end to end.
 
-Starting projects from scratch is slow and tedious. This project serves as a boilerplate for future projects to accelerate the initial setup phase.
-
-### Description
-REST API built using FastAPI and PostgreSQL, using Docker to containerise the application. Traefik acting as a reverse proxy, routing traffic to the API.
+- **App**: FastAPI + PostgreSQL (SQLAlchemy, Alembic), argon2 password hashing, JWT auth, input limits, rate-limited login.
+- **Runtime**: one Docker Compose stack for dev and prod (Traefik, Prometheus, Grafana, scheduled backups), with environment differences kept in small overlays.
+- **Infrastructure**: Terraform for an ARM EC2 server, S3 backups bucket and least-privilege IAM, with no SSH and no secrets in state.
+- **Delivery**: GitHub Actions runs lint, tests, an image build and Terraform checks, then deploys `main` through SSM using OIDC, with a health check and one-run rollbacks.
 
 ### Architecture
+Runtime, on one EC2 instance:
+```mermaid
+flowchart LR
+    client([Client]) -->|"HTTPS :443<br/>(DNS on Cloudflare)"| traefik
+    subgraph ec2 ["EC2 t4g.small: Docker Compose (prod overlay)"]
+        traefik["Traefik<br/>TLS, HTTP→HTTPS, rate limits"] --> api["FastAPI"]
+        api --> db[("PostgreSQL")]
+        migrate["migrate<br/>alembic upgrade, one-off"] --> db
+        backup["backup<br/>daily pg_dump"] --> db
+        prometheus["Prometheus"] -->|"scrapes /metrics"| api
+        grafana["Grafana"] --> prometheus
+    end
+    backup -->|upload| s3[("S3 backups<br/>30-day expiry")]
+    traefik -.->|"DNS-01 challenge"| cfapi["Cloudflare API"]
+    you([You]) -.->|"SSM port forward"| grafana
+```
 
+Delivery, from merge to running:
+```mermaid
+flowchart LR
+    merge([Merge to main]) --> ci["CI<br/>lint, tests, image build,<br/>terraform checks"]
+    ci -->|passes| deploy["Deploy workflow"]
+    deploy -->|"OIDC, no stored keys"| role["IAM deploy role"]
+    role -->|"ssm:SendCommand<br/>(deploy document only)"| server["EC2<br/>checkout SHA from main,<br/>render .env, compose up --wait"]
+    params[("SSM Parameter Store<br/>secrets")] --> server
+    deploy -->|"GET /ready"| health{"healthy?"}
+    health -->|no| rollback["Re-run Deploy with<br/>the previous SHA"]
+```
+`terraform apply`, run from your machine, creates the instance, bucket, IAM roles, deploy document and GitHub OIDC provider.
+
+### Design decisions
+- **One instance running Compose, not ECS/EKS and RDS.** A `t4g.small` with a 20 GiB volume and a public IPv4 address costs roughly $20 a month on demand, and dev and prod run the same stack, so what works locally works on the server. The trade-offs are deliberate: one instance is a single point of failure, a deploy restarts containers (a few seconds of downtime), and the database lives on the instance's disk.
+- **What I'd change at scale**: move Postgres to RDS (managed backups, point-in-time recovery, Multi-AZ), build images once in CI and push them to ECR, run the API on ECS Fargate or several instances behind a load balancer for zero-downtime deploys, and add alerting.
+- **No SSH, no long-lived keys.** Port 22 is closed; shell access and deploys go through SSM. GitHub gets short-lived credentials through OIDC for a role that can only run one deploy document on one instance, and that document only accepts a commit already on `main`.
+- **Secrets only in SSM Parameter Store.** Terraform knows the parameter path, never the values, so neither state nor the repo holds secrets; the server writes `.env` from SSM on every deploy.
+- **Failure budget.** Backups run daily, so losing the instance loses up to 24 hours of writes (shorten `BACKUP_INTERVAL_SECONDS` for less). Recovery means `terraform apply` for a new server, then restoring the latest dump from S3; this is manual.
+
+### Known limitations
+Kept here deliberately, in the order I'd tackle them:
+- **The deployed image isn't the tested one.** CI builds an x86 image and discards it; the ARM server builds its own from the same commit. Next step: build arm64 in CI, push to ECR, deploy by digest.
+- **Server settings drift.** Non-secret settings (domain, bucket, `ENABLE_DOCS`) are written to `/etc/task-api/deploy.env` once at first boot and edited by hand afterwards. Next step: Terraform-managed SSM parameters, read on every deploy like the secrets.
+- **Terraform state is local.** Only whoever holds `terraform.tfstate` can change the infrastructure. Next step: an S3 backend with state locking.
+- **Metrics without alerts.** Prometheus and Grafana show what happened, but nothing pages anyone. Next step: Grafana alerting to email or Slack.
+- **Rollbacks don't undo migrations.** Write migrations that the previous release can still run against (add columns before using them, drop them a release later), or restore a backup.
 
 ## Map
 ```text
@@ -153,7 +196,17 @@ $(terraform output -raw ssm_session_command)
 sudo tail -f /var/log/cloud-init-output.log
 ```
 
-5. For automatic deploys, add these GitHub repository variables (Settings → Secrets and variables → Actions → Variables) from the Terraform outputs: `AWS_DEPLOY_ROLE_ARN` (`github_deploy_role_arn`), `AWS_REGION` (`aws_region`), `DEPLOY_INSTANCE_ID` (`instance_id`), `DEPLOY_DOCUMENT_NAME` (`deploy_document_name`). From then on, every push to `main` that passes CI is deployed; the Deploy workflow can also be run by hand.
+5. For automatic deploys, add these GitHub repository variables (Settings → Secrets and variables → Actions → Variables) from the Terraform outputs: `AWS_DEPLOY_ROLE_ARN` (`github_deploy_role_arn`), `AWS_REGION` (`aws_region`), `DEPLOY_INSTANCE_ID` (`instance_id`), `DEPLOY_DOCUMENT_NAME` (`deploy_document_name`). Optionally set `DEPLOY_HEALTH_URL` to `https://<api_domain>/ready`, which the workflow checks after each deploy. From then on, every push to `main` that passes CI is deployed; the Deploy workflow can also be run by hand.
+
+#### Rollback
+Every deploy log prints `Previously deployed: <sha>`. To roll back, run the **Deploy** workflow by hand (Actions → Deploy → Run workflow) and paste that SHA, or any other commit on `main`, into `commit`. The server refuses commits that aren't on `main`. A rollback redeploys the old code but leaves the database schema as it is; see Known limitations.
+
+#### Grafana and Prometheus in production
+They aren't exposed publicly: both listen on the server's loopback only. Open a tunnel with the AWS CLI and Session Manager plugin, then browse to it locally:
+```bash
+$(terraform output -raw grafana_tunnel_command)   # then http://localhost:3000/grafana
+```
+Log in as `admin` with the `grafana-admin-password` parameter. For Prometheus, run the same command with `portNumber=9090,localPortNumber=9090` and open http://localhost:9090/prometheus.
 
 The non-secret server settings (domain, bucket, region, `ENABLE_DOCS`) are in `/etc/task-api/deploy.env` on the server. It is only written on first boot, so edit it there to change them, then redeploy. To deploy by hand from an SSM session: `sudo /opt/task-api/deploy/deploy.sh` (deploys the checked-out commit).
 
@@ -194,9 +247,9 @@ Development:
 
 Production (HTTPS only, HTTP redirects):
 - **API**: https://DOMAIN
-- **Grafana**: https://DOMAIN/grafana
+- **Grafana and Prometheus**: through an SSM tunnel only (see Production).
 - `/docs`, `/redoc` and `/openapi.json` are disabled. They are only served when `ENABLE_DOCS=true`, which the dev overlay sets; to enable them in production, add `ENABLE_DOCS=true` to `/etc/task-api/deploy.env` on the server and redeploy.
-- Prometheus and `/metrics` are not exposed publicly; Prometheus scrapes the API over the internal Docker network.
+- `/metrics` is not exposed publicly; Prometheus scrapes the API over the internal Docker network.
 
 `/login` and `/register` are rate-limited by Traefik to 5 requests per minute per IP.
 
@@ -207,4 +260,4 @@ GitHub Actions runs on every pull request and push to `main`:
 - **build**: builds the Docker image.
 - **terraform**: `terraform fmt -check`, `validate` and `terraform test`, which runs plan-level checks against a mocked AWS provider, so no AWS credentials are needed.
 
-After CI passes on a push to `main`, the **Deploy** workflow assumes the deploy role through GitHub OIDC (no AWS keys in GitHub) and runs the SSM deploy document on the server for that commit. It is skipped until the repository variables from the production setup are set.
+After CI passes on a push to `main`, the **Deploy** workflow assumes the deploy role through GitHub OIDC (no AWS keys in GitHub), runs the SSM deploy document on the server for that commit, and then checks `DEPLOY_HEALTH_URL` if it's set. It can also be run by hand with a `commit` to roll back. It is skipped until the repository variables from the production setup are set.

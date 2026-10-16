@@ -40,3 +40,8 @@ output "ssm_parameter_names" {
     "${local.ssm_parameter_prefix}/${name}"
   ]
 }
+
+output "grafana_tunnel_command" {
+  description = "Forwards Grafana to http://localhost:3000/grafana (Prometheus: use portNumber=9090 for http://localhost:9090/prometheus)"
+  value       = "aws ssm start-session --region ${var.aws_region} --target ${aws_instance.app.id} --document-name AWS-StartPortForwardingSession --parameters portNumber=3000,localPortNumber=3000"
+}
