@@ -83,6 +83,13 @@ task-api
 - **Terraform**: IaC tool to configure cloud resources with reproducibility.
 
 
+### Using this template
+When starting a new project from this repo:
+1. **Name it**: pick a `project_name` for Terraform (it also sets the SSM path `/<project_name>/`), and rename the `task_*` container names in `compose.yaml` and `docker-compose.prod.yaml`, the `task-api-*` image names in `compose.yaml`, the `docker build` tag in `.github/workflows/pull_requests.yml`, the Prometheus `job_name` in `prometheus.yml`, and the root message in `app/main.py`. Paths on the server (`/opt/task-api`, `/etc/task-api`) are internal and can stay.
+2. **Replace the example domain**: swap the `Task` model, `app/routes.py`, `app/schemas.py` and `tests/test_tasks.py` for your own. Keep `User`, `app/auth.py` and `app/user_routes.py` if you want the built-in auth. Then delete `alembic/versions/e30f5768187a_initial_schema.py` and generate a fresh initial migration against an empty database: `alembic revision --autogenerate -m "initial schema"`.
+3. **Point it at your repo**: update the clone URL below, and set `repository_url` and `github_repository` in `terraform/terraform.tfvars` (see Production).
+4. **Set up GitHub**: CI needs nothing. For deploys, add the repository variables listed in Production step 5 after `terraform apply`.
+
 ### Startup
 `compose.yaml` holds the shared services and is always combined with an overlay: `docker-compose.dev.yaml` for local work or `docker-compose.prod.yaml` for a server. Running `docker compose up` on `compose.yaml` alone starts no Traefik, so the API is unreachable.
 
@@ -120,7 +127,7 @@ aws ssm put-parameter --region $REGION --type SecureString --name $PREFIX/cloudf
 ```
    Postgres only reads its password when the data volume is first created; changing `postgres-password` later also requires `ALTER USER app PASSWORD '...'` in the database.
 
-2. Create `terraform/terraform.tfvars` (gitignored) and apply. `api_domain` and `acme_email` are required; also set `repository_url` and `github_repository` to your fork. If the AWS account already has a GitHub OIDC provider, set `create_github_oidc_provider = false`.
+2. Create `terraform/terraform.tfvars` (gitignored) and apply. `api_domain`, `acme_email`, `repository_url` and `github_repository` are required and have no defaults, so a clone can never trust or deploy another repository; `github_repository` is `owner/name`, not a URL. If the AWS account already has a GitHub OIDC provider, set `create_github_oidc_provider = false`.
 ```hcl
 aws_region        = "eu-north-1"
 project_name      = "task-api"

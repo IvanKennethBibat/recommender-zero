@@ -33,16 +33,20 @@ variable "root_volume_size" {
   default     = 20
 }
 
+# No defaults: a clone of this template must point at its own repository, never trust or deploy someone else's
 variable "repository_url" {
-  description = "Git URL cloned to /opt/task-api and fetched on each deploy (use your fork; must be readable without credentials)"
+  description = "Git URL of your repository, cloned to /opt/task-api and fetched on each deploy; must be readable without credentials"
   type        = string
-  default     = "https://github.com/IvanKennethBibat/task-api.git"
 }
 
 variable "github_repository" {
-  description = "GitHub repository (owner/name) allowed to assume the deploy role from its main branch"
+  description = "Your GitHub repository as owner/name; only its main branch may assume the deploy role"
   type        = string
-  default     = "IvanKennethBibat/task-api"
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", var.github_repository))
+    error_message = "github_repository must be owner/name (e.g. my-org/my-app), not a URL."
+  }
 }
 
 variable "create_github_oidc_provider" {
