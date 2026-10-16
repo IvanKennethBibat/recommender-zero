@@ -1,5 +1,5 @@
 # Same major version as the db service, so pg_dump matches the server
-FROM postgres:16.14
+FROM postgres:16.15
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends awscli \
