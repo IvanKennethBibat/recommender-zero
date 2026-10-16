@@ -1,4 +1,7 @@
 .env
+# Temp files from deploy/render-env.sh
+.env.*
+!.env.example
 venv/
 *.pkg
 .terraform/
