@@ -15,6 +15,21 @@ services:
       timeout: 5s
       retries: 5
 
+  # Applies pending Alembic migrations once, then exits; the API only starts if this succeeds
+  migrate:
+    image: task-api-api:${IMAGE_TAG:-latest}
+    build: .
+    container_name: task_api_migrate
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    networks:
+      - default
+
   api:
     image: task-api-api:${IMAGE_TAG:-latest}
     build: .
@@ -23,6 +38,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     env_file:
       - .env
     networks:

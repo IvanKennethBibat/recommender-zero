@@ -51,7 +51,7 @@ task-api
 ├── .env.example                 # template for .env, copy and fill in
 ├── .gitignore                   # ignores local environment and generated files
 ├── alembic.ini                  # Alembic configuration
-├── compose.yaml                 # base services: db, api, prometheus, grafana
+├── compose.yaml                 # base services: db, migrate, api, prometheus, grafana
 ├── docker-compose.dev.yaml      # dev overlay: Traefik on localhost over HTTP
 ├── docker-compose.prod.yaml     # prod overlay: Traefik with HTTPS via Let's Encrypt
 ├── Dockerfile                   # container image for the FastAPI app
@@ -88,19 +88,23 @@ task-api
 ```
 
 #### Development
-3. Apply migrations, then start the stack. Traefik listens on `127.0.0.1:80` only.
+3. Start the stack. Traefik listens on `127.0.0.1:80` only.
 ```bash
-docker compose -f compose.yaml -f docker-compose.dev.yaml run --rm api alembic upgrade head
 docker compose -f compose.yaml -f docker-compose.dev.yaml up -d
 ```
 
 #### Production
 3. In `.env`, also set `DOMAIN` (bare hostname, e.g. `api.example.com`), `ACME_EMAIL` for Let's Encrypt, and `GF_SERVER_ROOT_URL=https://<DOMAIN>/grafana`. Point the domain's DNS at the server and open ports 80 and 443.
 
-4. Apply migrations, then start the stack. Run the migration step again on every deploy that adds a migration.
+4. Start the stack.
 ```bash
-docker compose -f compose.yaml -f docker-compose.prod.yaml run --rm api alembic upgrade head
 docker compose -f compose.yaml -f docker-compose.prod.yaml up -d
+```
+
+#### Database migrations
+The `migrate` service runs `alembic upgrade head` on every `up` and exits; the API waits for it and does not start if a migration fails (check `docker compose logs migrate`). When you change `app/models.py`, generate a new migration and commit it:
+```bash
+alembic revision --autogenerate -m "describe the change"
 ```
 
 #### Running tests locally
